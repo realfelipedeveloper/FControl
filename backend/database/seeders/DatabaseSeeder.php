@@ -19,16 +19,15 @@ class DatabaseSeeder extends Seeder
             return;
         }
 
-        $user = User::factory()->create([
-            'name' => 'Usuário Demonstração',
-            'email' => 'demo@fcontrol.local',
-            'password' => 'FControl@12345',
-        ]);
+        $user = User::updateOrCreate(
+            ['email' => 'demo@fcontrol.local'],
+            ['name' => 'Usuário Demonstração', 'password' => 'FControl@12345'],
+        );
         foreach (['Moradia', 'Alimentação', 'Transporte', 'Saúde', 'Educação', 'Lazer', 'Assinaturas', 'Compras', 'Impostos', 'Outros'] as $name) {
-            $user->categories()->create(['name' => $name, 'type' => 'expense', 'is_default' => true]);
+            $user->categories()->firstOrCreate(['name' => $name, 'type' => 'expense'], ['is_default' => true]);
         }
         foreach (['Salário', 'Freelancer', 'Rendimentos', 'Reembolso', 'Venda', 'Outros'] as $name) {
-            $user->categories()->create(['name' => $name, 'type' => 'income', 'is_default' => true]);
+            $user->categories()->firstOrCreate(['name' => $name, 'type' => 'income'], ['is_default' => true]);
         }
     }
 }

@@ -2,8 +2,12 @@
 .env
 **/.env
 **/node_modules
+**/.pnpm-store
 **/vendor
 **/storage/logs
 **/coverage
 **/dist
+**/.angular
+**/playwright-report
+**/test-results
 backups

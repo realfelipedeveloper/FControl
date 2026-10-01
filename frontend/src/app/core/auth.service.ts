@@ -26,6 +26,7 @@ export class AuthService {
   restore(): Observable<boolean> { return this.refresh().pipe(map(() => true)); }
   logout(): void { this.http.post(`${environment.apiUrl}/auth/logout`, {}, { withCredentials: true }).subscribe({ complete: () => this.clear(), error: () => this.clear() }); }
   clear(): void { this.tokenState.set(null); this.userState.set(null); void this.router.navigate(['/login']); }
+  updateUser(user: User): void { this.userState.set(user); }
   private authorize(path: string, body: unknown): Observable<void> { return this.http.post<AuthResponse>(`${environment.apiUrl}/${path}`, body, { withCredentials: true }).pipe(tap(response => this.accept(response)), map(() => undefined)); }
   private accept(response: AuthResponse): void { this.tokenState.set(response.data.access_token); this.userState.set(response.data.user); }
 }

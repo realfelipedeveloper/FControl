@@ -16,16 +16,18 @@ Route::prefix('v1')->group(function () {
     Route::prefix('auth')->middleware('throttle:auth')->group(function () {
         Route::post('register', [AuthController::class, 'register']);
         Route::post('login', [AuthController::class, 'login']);
-        Route::post('refresh', [AuthController::class, 'refresh']);
         Route::post('forgot-password', [AuthController::class, 'forgotPassword']);
         Route::post('reset-password', [AuthController::class, 'resetPassword']);
     });
+    Route::post('auth/refresh', [AuthController::class, 'refresh'])->middleware('throttle:refresh');
 
     Route::middleware(['jwt.auth', 'throttle:api'])->group(function () {
         Route::post('auth/logout', [AuthController::class, 'logout']);
         Route::get('auth/me', [AuthController::class, 'me']);
         Route::patch('auth/profile', [AuthController::class, 'updateProfile']);
         Route::put('auth/password', [AuthController::class, 'changePassword']);
+        Route::get('auth/sessions', [AuthController::class, 'sessions']);
+        Route::delete('auth/sessions/{id}', [AuthController::class, 'revokeSession'])->whereNumber('id');
         Route::get('dashboard', DashboardController::class);
 
         foreach (['accounts', 'categories', 'tags', 'transactions', 'cards', 'budgets', 'goals', 'recurrences'] as $resource) {

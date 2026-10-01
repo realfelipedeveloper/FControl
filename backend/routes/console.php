@@ -1,5 +1,6 @@
 <?php
 
+use App\Models\Invoice;
 use App\Models\Recurrence;
 use App\Models\Transaction;
 use Carbon\CarbonImmutable;
@@ -28,3 +29,8 @@ Artisan::command('fcontrol:materialize-recurrences', function () {
 })->purpose('Materializa lançamentos recorrentes de forma idempotente');
 
 Schedule::command('fcontrol:materialize-recurrences')->dailyAt('00:15')->withoutOverlapping();
+
+Schedule::call(function () {
+    Invoice::where('status', 'open')->whereDate('period_end', '<', today())->update(['status' => 'closed']);
+    Invoice::whereIn('status', ['open', 'closed'])->whereDate('due_date', '<', today())->update(['status' => 'overdue']);
+})->dailyAt('00:10')->name('fcontrol:update-invoices')->withoutOverlapping();

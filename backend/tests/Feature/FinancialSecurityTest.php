@@ -10,6 +10,7 @@ use App\Models\Goal;
 use App\Models\Transaction;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Gate;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\Test;
 use Tests\TestCase;
@@ -41,5 +42,15 @@ class FinancialSecurityTest extends TestCase
         $item = $model::create($attributes);
         $token = auth('api')->login($attacker);
         $this->withToken($token)->getJson("/api/v1/$endpoint/{$item->id}")->assertNotFound();
+    }
+
+    #[Test]
+    public function policy_confirma_propriedade_do_recurso(): void
+    {
+        [$owner, $attacker] = User::factory()->count(2)->create();
+        $account = Account::create(['user_id' => $owner->id, 'name' => 'Privada', 'type' => 'checking', 'initial_balance' => '0.00']);
+
+        self::assertTrue(Gate::forUser($owner)->allows('view', $account));
+        self::assertFalse(Gate::forUser($attacker)->allows('view', $account));
     }
 }

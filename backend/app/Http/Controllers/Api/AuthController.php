@@ -17,6 +17,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Password;
 use Illuminate\Support\Str;
+use Illuminate\Validation\Rule;
 use PHPOpenSourceSaver\JWTAuth\Facades\JWTAuth;
 use Symfony\Component\HttpFoundation\Cookie;
 
@@ -95,7 +96,7 @@ class AuthController extends Controller
 
     public function updateProfile(Request $request): JsonResponse
     {
-        $data = $request->validate(['name' => ['sometimes', 'string', 'max:120'], 'currency' => ['sometimes', 'string', 'size:3'], 'locale' => ['sometimes', 'in:pt-BR'], 'timezone' => ['sometimes', 'timezone']]);
+        $data = $request->validate(['name' => ['sometimes', 'string', 'max:120'], 'email' => ['sometimes', 'email', 'max:190', Rule::unique('users', 'email')->ignore($request->user()->id)], 'currency' => ['sometimes', 'string', 'size:3'], 'locale' => ['sometimes', 'in:pt-BR'], 'timezone' => ['sometimes', 'timezone']]);
         $request->user()->update($data);
 
         return response()->json(['data' => $request->user()->fresh(), 'message' => 'Perfil atualizado.']);
@@ -109,6 +110,20 @@ class AuthController extends Controller
         AuditService::record($request, 'auth.password_changed', $request->user());
 
         return response()->json(['message' => 'Senha alterada. Entre novamente nos outros dispositivos.']);
+    }
+
+    public function sessions(Request $request): JsonResponse
+    {
+        return response()->json(['data' => RefreshToken::where('user_id', $request->user()->id)->whereNull('revoked_at')->where('expires_at', '>', now())->latest()->get(['id', 'family_id', 'device_name', 'ip_address', 'user_agent', 'expires_at', 'created_at'])]);
+    }
+
+    public function revokeSession(Request $request, int $id): JsonResponse
+    {
+        $session = RefreshToken::where('user_id', $request->user()->id)->findOrFail($id);
+        RefreshToken::where('family_id', $session->family_id)->update(['revoked_at' => now()]);
+        AuditService::record($request, 'auth.session_revoked');
+
+        return response()->json(['message' => 'Sessão revogada.']);
     }
 
     public function forgotPassword(Request $request): JsonResponse

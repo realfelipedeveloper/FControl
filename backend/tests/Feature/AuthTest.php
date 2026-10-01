@@ -3,8 +3,10 @@
 namespace Tests\Feature;
 
 use App\Models\User;
+use Illuminate\Auth\Notifications\ResetPassword;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Notification;
 use Illuminate\Support\Facades\Password;
 use PHPUnit\Framework\Attributes\Test;
 use Tests\TestCase;
@@ -58,5 +60,27 @@ class AuthTest extends TestCase
         ])->assertOk()->assertJsonPath('message', 'Senha redefinida com sucesso.');
 
         $this->assertTrue(Hash::check('SenhaNova123', $user->fresh()->password));
+    }
+
+    #[Test]
+    public function recuperacao_envia_link_para_a_tela_angular(): void
+    {
+        Notification::fake();
+        $user = User::factory()->create();
+
+        $this->postJson('/api/v1/auth/forgot-password', ['email' => $user->email])->assertOk();
+
+        Notification::assertSentTo($user, ResetPassword::class, fn (ResetPassword $notification) => str_contains($notification->toMail($user)->actionUrl, '/redefinir-senha?token=') && str_contains($notification->toMail($user)->actionUrl, urlencode($user->email)));
+    }
+
+    #[Test]
+    public function seeder_de_demonstracao_e_idempotente(): void
+    {
+        $this->seed();
+        $this->seed();
+
+        $user = User::where('email', 'demo@fcontrol.local')->firstOrFail();
+        self::assertTrue(Hash::check('FControl@12345', $user->password));
+        self::assertSame(16, $user->categories()->count());
     }
 }

@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Goal;
+use App\Services\AuditService;
 use App\Services\Money;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -21,6 +22,7 @@ class GoalController extends Controller
             $new = Money::toCents((string) $goal->current_amount) + Money::toCents((string) $data['amount']);
             $goal->update(['current_amount' => Money::fromCents($new), 'status' => $new >= Money::toCents((string) $goal->target_amount) ? 'completed' : $goal->status]);
         });
+        AuditService::record($request, 'goal.contribution_created', $goal);
 
         return response()->json(['data' => $goal->fresh()->load('contributions'), 'message' => 'Contribuição registrada.'], 201);
     }

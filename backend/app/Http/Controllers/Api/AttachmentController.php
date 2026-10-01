@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Attachment;
 use App\Models\Transaction;
+use App\Services\AuditService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
@@ -19,6 +20,7 @@ class AttachmentController extends Controller
         $file = $data['file'];
         $path = $file->store('attachments/'.$request->user()->id, 'local');
         $attachment = Attachment::create(['user_id' => $request->user()->id, 'transaction_id' => $item->id, 'path' => $path, 'original_name' => basename($file->getClientOriginalName()), 'mime_type' => $file->getMimeType(), 'size' => $file->getSize()]);
+        AuditService::record($request, 'attachment.created', $attachment);
 
         return response()->json(['data' => $attachment, 'message' => 'Anexo enviado.'], 201);
     }
@@ -35,6 +37,7 @@ class AttachmentController extends Controller
         $item = Attachment::where('user_id', $request->user()->id)->findOrFail($id);
         Storage::disk($item->disk)->delete($item->path);
         $item->delete();
+        AuditService::record($request, 'attachment.deleted', $item);
 
         return response()->json(['message' => 'Anexo removido.']);
     }

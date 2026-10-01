@@ -2,9 +2,13 @@
 
 namespace App\Http\Controllers\Api;
 
+use App\Enums\FinancialType;
+use App\Enums\TransactionStatus;
 use App\Http\Controllers\Controller;
+use App\Http\Resources\FinancialResource;
 use App\Models\Account;
 use App\Models\Budget;
+use App\Models\CardInstallment;
 use App\Models\Category;
 use App\Models\CreditCard;
 use App\Models\Goal;
@@ -12,11 +16,15 @@ use App\Models\Recurrence;
 use App\Models\Tag;
 use App\Models\Transaction;
 use App\Services\AuditService;
+use App\Services\Money;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Gate;
 use Illuminate\Validation\Rule;
+use Illuminate\Validation\ValidationException;
 
 class ResourceController extends Controller
 {
@@ -24,16 +32,17 @@ class ResourceController extends Controller
         'accounts' => [Account::class, ['name' => 'required|string|max:120', 'type' => 'required|in:checking,savings,cash,digital,investment,other', 'institution' => 'nullable|string|max:120', 'initial_balance' => 'required|decimal:0,2', 'active' => 'boolean', 'notes' => 'nullable|string|max:2000'], []],
         'categories' => [Category::class, ['parent_id' => 'nullable|integer', 'type' => 'required|in:income,expense', 'name' => 'required|string|max:100', 'color' => 'nullable|regex:/^#[0-9A-Fa-f]{6}$/'], ['parent']],
         'tags' => [Tag::class, ['name' => 'required|string|max:60', 'color' => 'nullable|regex:/^#[0-9A-Fa-f]{6}$/'], []],
-        'transactions' => [Transaction::class, ['account_id' => 'required|integer', 'category_id' => 'nullable|integer', 'type' => 'required|in:income,expense', 'description' => 'required|string|max:180', 'amount' => 'required|decimal:0,2|gt:0', 'transaction_date' => 'required|date', 'competence_date' => 'required|date', 'due_date' => 'nullable|date', 'settled_at' => 'nullable|date', 'status' => 'required|in:planned,pending,paid,received,overdue,cancelled', 'is_fixed' => 'boolean', 'notes' => 'nullable|string|max:3000', 'tag_ids' => 'array', 'tag_ids.*' => 'integer'], ['account', 'category', 'tags']],
+        'transactions' => [Transaction::class, ['account_id' => 'required|integer', 'category_id' => 'nullable|integer', 'type' => 'required|in:income,expense', 'description' => 'required|string|max:180', 'amount' => 'required|decimal:0,2|gt:0', 'transaction_date' => 'required|date', 'competence_date' => 'required|date', 'due_date' => 'nullable|date', 'settled_at' => 'nullable|date', 'status' => 'required|in:planned,pending,paid,received,overdue,cancelled', 'is_fixed' => 'boolean', 'notes' => 'nullable|string|max:3000', 'tag_ids' => 'array', 'tag_ids.*' => 'integer'], ['account', 'category', 'tags', 'attachments']],
         'cards' => [CreditCard::class, ['payment_account_id' => 'required|integer', 'name' => 'required|string|max:120', 'institution' => 'nullable|string|max:120', 'credit_limit' => 'required|decimal:0,2|gt:0', 'closing_day' => 'required|integer|between:1,28', 'due_day' => 'required|integer|between:1,28', 'active' => 'boolean'], ['paymentAccount']],
         'budgets' => [Budget::class, ['category_id' => 'required|integer', 'month' => 'required|date_format:Y-m-d', 'planned_amount' => 'required|decimal:0,2|gt:0'], ['category']],
-        'goals' => [Goal::class, ['name' => 'required|string|max:150', 'description' => 'nullable|string|max:2000', 'target_amount' => 'required|decimal:0,2|gt:0', 'current_amount' => 'nullable|decimal:0,2|min:0', 'target_date' => 'nullable|date', 'status' => 'required|in:active,completed,paused'], []],
-        'recurrences' => [Recurrence::class, ['frequency' => 'required|in:weekly,monthly,yearly', 'start_date' => 'required|date', 'end_date' => 'nullable|date|after_or_equal:start_date', 'max_occurrences' => 'nullable|integer|min:1', 'next_execution_at' => 'required|date', 'active' => 'boolean', 'template' => 'required|array'], []],
+        'goals' => [Goal::class, ['name' => 'required|string|max:150', 'description' => 'nullable|string|max:2000', 'target_amount' => 'required|decimal:0,2|gt:0', 'current_amount' => 'nullable|decimal:0,2|min:0', 'target_date' => 'nullable|date', 'status' => 'required|in:active,completed,paused'], ['contributions']],
+        'recurrences' => [Recurrence::class, ['frequency' => 'required|in:weekly,monthly,yearly', 'start_date' => 'required|date', 'end_date' => 'nullable|date|after_or_equal:start_date', 'max_occurrences' => 'nullable|integer|min:1', 'next_execution_at' => 'required|date', 'active' => 'boolean', 'template' => 'required|array', 'template.account_id' => 'required|integer', 'template.category_id' => 'nullable|integer', 'template.type' => 'required|in:income,expense', 'template.description' => 'required|string|max:180', 'template.amount' => 'required|decimal:0,2|gt:0', 'template.status' => 'required|in:planned,pending,paid,received', 'template.due_date' => 'nullable|date', 'template.settled_at' => 'nullable|date', 'template.is_fixed' => 'boolean', 'template.notes' => 'nullable|string|max:3000'], []],
     ];
 
     public function index(Request $request): JsonResponse
     {
         [$model,, $with] = $this->config($request);
+        Gate::authorize('viewAny', $model);
         $query = $model::query()->where('user_id', $request->user()->id)->with($with);
         $this->filters($query, $request);
         $sort = in_array($request->string('sort')->toString(), ['name', 'description', 'created_at', 'transaction_date', 'due_date', 'month', 'target_date'], true) ? $request->string('sort')->toString() : 'created_at';
@@ -42,6 +51,23 @@ class ResourceController extends Controller
         if ($request->route('resource') === 'accounts') {
             $result->getCollection()->each->append('current_balance');
         }
+        if ($request->route('resource') === 'cards') {
+            $result->getCollection()->each(fn (CreditCard $card) => $this->appendCardLimits($card));
+        }
+        if ($request->route('resource') === 'budgets') {
+            $result->getCollection()->each(function (Budget $budget) use ($request) {
+                $month = Carbon::parse((string) $budget->month);
+                $normal = (string) Transaction::where('user_id', $request->user()->id)->where('affects_metrics', true)->where('type', 'expense')->where('category_id', $budget->category_id)->whereYear('competence_date', $month->year)->whereMonth('competence_date', $month->month)->whereNot('status', 'cancelled')->sum('amount');
+                $card = (string) CardInstallment::whereHas('purchase', fn ($query) => $query->where('user_id', $request->user()->id)->where('category_id', $budget->category_id))->whereYear('competence_date', $month->year)->whereMonth('competence_date', $month->month)->sum('amount');
+                $realized = Money::fromCents(Money::toCents($normal) + Money::toCents($card));
+                $remaining = Money::fromCents(Money::toCents((string) $budget->planned_amount) - Money::toCents($realized));
+                $percentage = Money::toCents((string) $budget->planned_amount) > 0 ? round(Money::toCents($realized) / Money::toCents((string) $budget->planned_amount) * 100, 2) : 0;
+                $budget->setAttribute('realized_amount', $realized);
+                $budget->setAttribute('remaining_amount', $remaining);
+                $budget->setAttribute('percentage', $percentage);
+                $budget->setAttribute('indicator', $percentage > 100 ? 'exceeded' : ($percentage >= 80 ? 'near' : 'normal'));
+            });
+        }
 
         return response()->json($result);
     }
@@ -49,7 +75,11 @@ class ResourceController extends Controller
     public function store(Request $request): JsonResponse
     {
         [$model, $rules, $with] = $this->config($request);
+        Gate::authorize('create', $model);
         $data = $request->validate($this->secureRules($rules, $request));
+        if ($model === Category::class) {
+            $this->validateCategoryHierarchy($request, $data);
+        }
         $tagIds = $data['tag_ids'] ?? [];
         unset($data['tag_ids']);
         $item = $model::create([...$data, 'user_id' => $request->user()->id]);
@@ -58,26 +88,34 @@ class ResourceController extends Controller
         }
         AuditService::record($request, $request->route('resource').'.created', $item);
 
-        return response()->json(['data' => $item->load($with), 'message' => 'Registro criado com sucesso.'], 201);
+        return (new FinancialResource($item->load($with)))->additional(['message' => 'Registro criado com sucesso.'])->response()->setStatusCode(201);
     }
 
     public function show(Request $request, int $id): JsonResponse
     {
         [$model,, $with] = $this->config($request);
         $item = $model::where('user_id', $request->user()->id)->with($with)->findOrFail($id);
+        Gate::authorize('view', $item);
         if ($item instanceof Account) {
             $item->append('current_balance');
         }
+        if ($item instanceof CreditCard) {
+            $this->appendCardLimits($item);
+        }
 
-        return response()->json(['data' => $item]);
+        return (new FinancialResource($item))->response();
     }
 
     public function update(Request $request, int $id): JsonResponse
     {
         [$model, $rules, $with] = $this->config($request);
         $item = $model::where('user_id', $request->user()->id)->findOrFail($id);
+        Gate::authorize('update', $item);
         $partial = collect($this->secureRules($rules, $request))->map(fn ($rule) => is_array($rule) ? array_merge(['sometimes'], $rule) : 'sometimes|'.$rule)->all();
         $data = $request->validate($partial);
+        if ($item instanceof Category) {
+            $this->validateCategoryHierarchy($request, $data, $item);
+        }
         $tagIds = $data['tag_ids'] ?? null;
         unset($data['tag_ids']);
         $item->update($data);
@@ -86,13 +124,14 @@ class ResourceController extends Controller
         }
         AuditService::record($request, $request->route('resource').'.updated', $item);
 
-        return response()->json(['data' => $item->fresh()->load($with), 'message' => 'Registro atualizado.']);
+        return (new FinancialResource($item->fresh()->load($with)))->additional(['message' => 'Registro atualizado.'])->response();
     }
 
     public function destroy(Request $request, int $id): JsonResponse
     {
         [$model] = $this->config($request);
         $item = $model::where('user_id', $request->user()->id)->findOrFail($id);
+        Gate::authorize('delete', $item);
         $item->delete();
         AuditService::record($request, $request->route('resource').'.deleted', $item);
 
@@ -104,6 +143,7 @@ class ResourceController extends Controller
         [$model] = $this->config($request);
         abort_unless(in_array(SoftDeletes::class, class_uses_recursive($model), true), 404);
         $item = $model::withTrashed()->where('user_id', $request->user()->id)->findOrFail($id);
+        Gate::authorize('restore', $item);
         $item->restore();
         AuditService::record($request, $request->route('resource').'.restored', $item);
 
@@ -117,6 +157,16 @@ class ResourceController extends Controller
 
     private function secureRules(array $rules, Request $request): array
     {
+        if (in_array($request->route('resource'), ['categories', 'transactions'], true)) {
+            $rules['type'] = ['required', Rule::enum(FinancialType::class)];
+        }
+        if ($request->route('resource') === 'transactions') {
+            $rules['status'] = ['required', Rule::enum(TransactionStatus::class)];
+        }
+        if ($request->route('resource') === 'recurrences') {
+            $rules['template.type'] = ['required', Rule::enum(FinancialType::class)];
+        }
+
         foreach (['account_id', 'payment_account_id'] as $field) {
             if (isset($rules[$field])) {
                 $rules[$field] = ['required', Rule::exists('accounts', 'id')->where('user_id', $request->user()->id)->whereNull('deleted_at')];
@@ -130,6 +180,10 @@ class ResourceController extends Controller
         }
         if (isset($rules['tag_ids.*'])) {
             $rules['tag_ids.*'] = [Rule::exists('tags', 'id')->where('user_id', $request->user()->id)];
+        }
+        if (isset($rules['template.account_id'])) {
+            $rules['template.account_id'] = ['required', Rule::exists('accounts', 'id')->where('user_id', $request->user()->id)->whereNull('deleted_at')];
+            $rules['template.category_id'] = ['nullable', Rule::exists('categories', 'id')->where('user_id', $request->user()->id)->whereNull('deleted_at')];
         }
 
         return $rules;
@@ -161,6 +215,43 @@ class ResourceController extends Controller
         }
         if ($request->filled('to')) {
             $query->whereDate($request->route('resource') === 'transactions' ? 'transaction_date' : 'created_at', '<=', $request->input('to'));
+        }
+    }
+
+    private function appendCardLimits(CreditCard $card): void
+    {
+        $used = (string) $card->invoices()->whereIn('status', ['open', 'closed', 'overdue'])->sum('total');
+        $card->setAttribute('used_limit', $used);
+        $card->setAttribute('available_limit', Money::fromCents(Money::toCents((string) $card->credit_limit) - Money::toCents($used)));
+    }
+
+    /** @param array<string, mixed> $data */
+    private function validateCategoryHierarchy(Request $request, array $data, ?Category $item = null): void
+    {
+        $parentId = array_key_exists('parent_id', $data) ? $data['parent_id'] : $item?->parent_id;
+        if (! $parentId) {
+            return;
+        }
+        if ($item && (int) $parentId === $item->id) {
+            throw ValidationException::withMessages(['parent_id' => 'Uma categoria não pode ser pai dela mesma.']);
+        }
+
+        $parent = Category::where('user_id', $request->user()->id)->findOrFail($parentId);
+        $type = $data['type'] ?? $item?->type;
+        if ($parent->type !== $type) {
+            throw ValidationException::withMessages(['parent_id' => 'A categoria pai deve possuir o mesmo tipo.']);
+        }
+
+        $visited = [];
+        while ($parent) {
+            if ($item && $parent->id === $item->id) {
+                throw ValidationException::withMessages(['parent_id' => 'A hierarquia informada criaria um ciclo.']);
+            }
+            if (isset($visited[$parent->id])) {
+                throw ValidationException::withMessages(['parent_id' => 'A hierarquia de categorias contém um ciclo.']);
+            }
+            $visited[$parent->id] = true;
+            $parent = $parent->parent_id ? Category::where('user_id', $request->user()->id)->find($parent->parent_id) : null;
         }
     }
 }

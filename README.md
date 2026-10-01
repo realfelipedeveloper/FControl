@@ -49,7 +49,7 @@ docker compose exec backend php artisan migrate:fresh --seed
 docker compose exec backend php artisan test
 docker compose exec backend ./vendor/bin/pint --test
 docker compose exec backend ./vendor/bin/phpstan analyse --memory-limit=1G
-docker compose exec backend composer audit --locked
+docker run --rm -v "${PWD}/backend:/app" -w /app composer:2.9 audit --locked
 ```
 
 Frontend local:
@@ -85,7 +85,7 @@ Os dumps permanecem em `backups/`, ignorado pelo Git.
 
 ## API e segurança
 
-Todos os endpoints financeiros exigem JWT e derivam `user_id` do usuário autenticado. Consultas de recurso sempre incluem esse proprietário, prevenindo IDOR. A API aplica validação server-side, limites de requisição, proteção contra brute force, soft delete, auditoria de eventos, CORS restritivo, headers de segurança e respostas sem stack trace em produção.
+Todos os endpoints financeiros exigem JWT e derivam `user_id` do usuário autenticado. Consultas de recurso sempre incluem esse proprietário e Policies adicionam uma segunda camada de autorização, prevenindo IDOR. Form Requests, Enums e API Resources centralizam contratos importantes. A API aplica validação server-side, limites separados para autenticação e renovação de sessão, proteção contra brute force, soft delete, auditoria de eventos, CORS restritivo, headers de segurança e respostas sem stack trace em produção.
 
 Endpoints principais: `auth`, `accounts`, `categories`, `tags`, `transactions`, `transfers`, `cards`, `card-purchases`, `invoices`, `budgets`, `goals`, `recurrences`, `attachments`, `dashboard` e `reports` sob `/api/v1`.
 

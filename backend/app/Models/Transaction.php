@@ -19,14 +19,14 @@ use Illuminate\Support\Carbon;
  * @property-read Account $account
  * @property-read Category|null $category
  */
-#[Fillable(['user_id', 'account_id', 'category_id', 'recurrence_id', 'recurrence_key', 'type', 'description', 'amount', 'transaction_date', 'competence_date', 'due_date', 'settled_at', 'status', 'is_fixed', 'notes'])]
+#[Fillable(['user_id', 'account_id', 'category_id', 'recurrence_id', 'recurrence_key', 'type', 'description', 'amount', 'transaction_date', 'competence_date', 'due_date', 'settled_at', 'status', 'is_fixed', 'affects_metrics', 'notes'])]
 class Transaction extends Model
 {
     use SoftDeletes;
 
     protected function casts(): array
     {
-        return ['amount' => 'decimal:2', 'transaction_date' => 'date', 'competence_date' => 'date', 'due_date' => 'date', 'settled_at' => 'date', 'is_fixed' => 'boolean'];
+        return ['amount' => 'decimal:2', 'transaction_date' => 'date', 'competence_date' => 'date', 'due_date' => 'date', 'settled_at' => 'date', 'is_fixed' => 'boolean', 'affects_metrics' => 'boolean'];
     }
 
     public function account(): BelongsTo

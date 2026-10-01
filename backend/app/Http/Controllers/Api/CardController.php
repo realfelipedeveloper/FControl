@@ -19,7 +19,20 @@ class CardController extends Controller
 {
     public function purchases(Request $request): JsonResponse
     {
-        return response()->json(CardPurchase::where('user_id', $request->user()->id)->with('installments.invoice')->latest('purchased_at')->paginate(15));
+        $query = CardPurchase::where('user_id', $request->user()->id)->with(['creditCard', 'category', 'installments.invoice']);
+        foreach (['credit_card_id', 'category_id'] as $field) {
+            if ($request->filled($field)) {
+                $query->where($field, $request->input($field));
+            }
+        }
+        if ($request->filled('from')) {
+            $query->whereDate('purchased_at', '>=', $request->input('from'));
+        }
+        if ($request->filled('to')) {
+            $query->whereDate('purchased_at', '<=', $request->input('to'));
+        }
+
+        return response()->json($query->latest('purchased_at')->paginate(min($request->integer('per_page', 15), 100)));
     }
 
     public function purchase(Request $request): JsonResponse
@@ -45,13 +58,23 @@ class CardController extends Controller
 
             return $purchase;
         });
+        AuditService::record($request, 'card_purchase.created', $purchase);
 
         return response()->json(['data' => $purchase->load('installments.invoice'), 'message' => 'Compra e parcelas criadas.'], 201);
     }
 
     public function invoices(Request $request): JsonResponse
     {
-        return response()->json(Invoice::where('user_id', $request->user()->id)->with(['creditCard', 'installments'])->latest('due_date')->paginate(15));
+        Invoice::where('user_id', $request->user()->id)->whereIn('status', ['open', 'closed'])->whereDate('due_date', '<', today())->update(['status' => 'overdue']);
+
+        $query = Invoice::where('user_id', $request->user()->id)->with(['creditCard', 'installments.purchase']);
+        foreach (['credit_card_id', 'status'] as $field) {
+            if ($request->filled($field)) {
+                $query->where($field, $request->input($field));
+            }
+        }
+
+        return response()->json($query->latest('due_date')->paginate(min($request->integer('per_page', 15), 100)));
     }
 
     public function pay(Request $request, int $id): JsonResponse
@@ -60,7 +83,7 @@ class CardController extends Controller
         abort_if($invoice->status === 'paid', 422, 'Fatura já paga.');
         DB::transaction(function () use ($invoice, $request) {
             $invoice->lockForUpdate();
-            Transaction::create(['user_id' => $request->user()->id, 'account_id' => $invoice->creditCard->payment_account_id, 'type' => 'expense', 'description' => 'Pagamento de fatura '.$invoice->creditCard->name, 'amount' => $invoice->total, 'transaction_date' => now()->toDateString(), 'competence_date' => $invoice->period_start, 'settled_at' => now()->toDateString(), 'status' => 'paid', 'notes' => 'Pagamento financeiro da fatura; excluído das métricas de compras por cartão.']);
+            Transaction::create(['user_id' => $request->user()->id, 'account_id' => $invoice->creditCard->payment_account_id, 'type' => 'expense', 'description' => 'Pagamento de fatura '.$invoice->creditCard->name, 'amount' => $invoice->total, 'transaction_date' => now()->toDateString(), 'competence_date' => $invoice->period_start, 'settled_at' => now()->toDateString(), 'status' => 'paid', 'affects_metrics' => false, 'notes' => 'Pagamento financeiro da fatura; excluído das métricas de competência.']);
             $invoice->update(['status' => 'paid', 'paid_at' => now()]);
         });
         AuditService::record($request, 'invoice.paid', $invoice);

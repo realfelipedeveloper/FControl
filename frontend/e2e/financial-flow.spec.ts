@@ -18,5 +18,9 @@ test('fluxo financeiro pessoal completo', async ({ request, context, page, baseU
   expect((await request.post('/api/v1/budgets',{headers,data:{category_id:expenseCategory.id,month:'2026-09-01',planned_amount:'1500.00'}})).status()).toBe(201);
   expect((await request.post('/api/v1/goals',{headers,data:{name:'Viagem',target_amount:'8000.00',current_amount:'500.00',status:'active'}})).status()).toBe(201);
   expect((await request.get('/api/v1/dashboard',{headers})).status()).toBe(200);
-  await page.goto('/dashboard');await expect(page.getByRole('heading',{name:'Visão geral'})).toBeVisible();await page.getByRole('button',{name:/Encerrar sessão/}).click();await expect(page).toHaveURL(/\/login/);
+  await page.goto('/dashboard');await expect(page.getByRole('heading',{name:'Visão geral'})).toBeVisible();await expect(page.getByText('Salário')).toBeVisible();
+  await page.goto('/cartoes');await expect(page.getByRole('heading',{name:'Cartões e faturas'})).toBeVisible();await page.getByRole('button',{name:'Compras e parcelas'}).click();await expect(page.getByText('Notebook')).toBeVisible();await page.getByRole('button',{name:'Faturas'}).click();await expect(page.getByRole('heading',{name:'Cartão E2E'}).first()).toBeVisible();
+  await page.goto('/relatorios');const reportRows=page.locator('section article');await expect(reportRows.getByText('Salário',{exact:true})).toBeVisible();await expect(reportRows.getByText('Notebook',{exact:true}).first()).toBeVisible();
+  await page.goto('/metas');await expect(page.getByText('Viagem')).toBeVisible();await page.getByRole('button',{name:'Contribuir'}).click();await page.getByLabel('Valor').fill('250.00');await page.getByRole('button',{name:'Registrar contribuição'}).click();await expect(page.getByText('Contribuição registrada.')).toBeVisible();
+  await page.getByRole('button',{name:/Encerrar sessão/}).click();await expect(page).toHaveURL(/\/login/);
 });
