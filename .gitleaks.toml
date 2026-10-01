@@ -1,0 +1,9 @@
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Credenciais fictícias usadas apenas em testes automatizados"
+paths = [
+  '''^backend/tests/''',
+  '''^frontend/e2e/''',
+]
