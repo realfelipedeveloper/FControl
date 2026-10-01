@@ -1,0 +1,9 @@
+.git
+.env
+**/.env
+**/node_modules
+**/vendor
+**/storage/logs
+**/coverage
+**/dist
+backups

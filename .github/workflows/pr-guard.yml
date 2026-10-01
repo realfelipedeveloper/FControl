@@ -1,0 +1,15 @@
+name: Validação de fluxo Git
+on:
+  pull_request: { types: [opened, synchronize, reopened, edited] }
+jobs:
+  validate-flow:
+    name: Git Flow / origem e destino
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validar combinação de branches
+        env: { BASE: '${{ github.base_ref }}', HEAD: '${{ github.head_ref }}' }
+        run: |
+          if [[ "$BASE" == "develop" && "$HEAD" =~ ^(feature|fix|chore)/.+$ ]]; then exit 0; fi
+          if [[ "$BASE" == "main" && "$HEAD" == "develop" ]]; then exit 0; fi
+          echo "Fluxo inválido: $HEAD → $BASE" >&2
+          exit 1

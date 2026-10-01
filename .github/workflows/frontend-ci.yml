@@ -1,0 +1,21 @@
+name: Frontend CI
+on:
+  push: { branches: [main, develop, 'feature/**', 'fix/**', 'chore/**'] }
+  pull_request: { branches: [main, develop] }
+jobs:
+  frontend:
+    name: Frontend / lint, testes e build
+    runs-on: ubuntu-latest
+    defaults: { run: { working-directory: frontend } }
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+        with: { version: 10.17.1 }
+      - uses: actions/setup-node@v5
+        with: { node-version: 24.15.0, cache: pnpm, cache-dependency-path: frontend/pnpm-lock.yaml }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm build
+      - run: pnpm audit --audit-level=high

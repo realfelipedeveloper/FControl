@@ -1,0 +1,17 @@
+name: Abrir promoção para main
+on:
+  push: { branches: [develop] }
+permissions: { contents: read, pull-requests: write }
+jobs:
+  open-pr:
+    name: Promoção / develop para main
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Criar PR quando necessário
+        env: { GH_TOKEN: '${{ github.token }}' }
+        run: |
+          existing=$(gh pr list --base main --head develop --state open --json number --jq length)
+          if [ "$existing" -eq 0 ]; then
+            gh pr create --base main --head develop --title "chore: promover develop para main" --body "Promoção automática da branch \`develop\` para \`main\`. O merge permanece manual e depende da aprovação dos checks."
+          fi

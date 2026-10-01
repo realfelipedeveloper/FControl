@@ -1,0 +1,31 @@
+name: Backend CI
+on:
+  push: { branches: [main, develop, 'feature/**', 'fix/**', 'chore/**'] }
+  pull_request: { branches: [main, develop] }
+jobs:
+  backend:
+    name: Backend / qualidade e testes
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.4
+        env: { MYSQL_DATABASE: fcontrol_test, MYSQL_USER: fcontrol, MYSQL_PASSWORD: fcontrol, MYSQL_ROOT_PASSWORD: root }
+        ports: ['3306:3306']
+        options: >-
+          --health-cmd="mysqladmin ping -h localhost -proot" --health-interval=10s --health-timeout=5s --health-retries=10
+    defaults: { run: { working-directory: backend } }
+    steps:
+      - uses: actions/checkout@v5
+      - uses: shivammathur/setup-php@v2
+        with: { php-version: '8.5', extensions: 'bcmath, pdo_mysql, mbstring, fileinfo', coverage: none }
+      - uses: ramsey/composer-install@v3
+        with: { working-directory: backend }
+      - run: composer validate --strict
+      - run: cp .env.example .env && php artisan key:generate && php artisan jwt:secret --force
+      - run: php artisan migrate:fresh --seed --force
+        env: { DB_HOST: 127.0.0.1, DB_PORT: 3306, DB_DATABASE: fcontrol_test, DB_USERNAME: fcontrol, DB_PASSWORD: fcontrol }
+      - run: composer lint
+      - run: composer analyse
+      - run: php artisan test
+        env: { DB_CONNECTION: mysql, DB_HOST: 127.0.0.1, DB_PORT: 3306, DB_DATABASE: fcontrol_test, DB_USERNAME: fcontrol, DB_PASSWORD: fcontrol }
+      - run: composer audit --locked --no-interaction
