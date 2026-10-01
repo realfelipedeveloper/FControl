@@ -42,15 +42,14 @@ docker-compose.yml   ambiente integrado
 
 ## Comandos principais
 
-Backend, dentro do container:
+Backend em execução (as imagens finais não incluem dependências de desenvolvimento):
 
 ```powershell
-docker compose exec backend php artisan migrate:fresh --seed
-docker compose exec backend php artisan test
-docker compose exec backend ./vendor/bin/pint --test
-docker compose exec backend ./vendor/bin/phpstan analyse --memory-limit=1G
+docker compose exec backend php artisan migrate --force
 docker run --rm -v "${PWD}/backend:/app" -w /app composer:2.9 audit --locked
 ```
+
+Para testes e análise, use PHP 8.5/Composer localmente, instale `composer install` em `backend/` e configure um MySQL **exclusivo de testes** chamado `fcontrol_test` (host, usuário e senha via ambiente). Execute `php artisan test`, `vendor/bin/pint --test` e `vendor/bin/phpstan analyse --memory-limit=1G`. O CI prepara esse banco automaticamente. Os testes recriam tabelas: nunca use o banco da aplicação. `migrate:fresh --seed` também é destrutivo e não faz parte da inicialização normal.
 
 Frontend local:
 
@@ -74,6 +73,10 @@ O access token JWT dura 15 minutos e permanece apenas em memória no navegador. 
 
 Valores monetários usam `DECIMAL(15,2)` e cálculos de parcelamento usam centavos inteiros. Transferências, compras parceladas, pagamento de fatura, metas e recorrências usam transações de banco. O scheduler materializa recorrências diariamente e usa chave idempotente. Anexos são privados, limitados a 5 MB e exigem autenticação para download.
 
+O resultado mensal usa competência; o saldo usa liquidações efetivas. A projeção do fechamento inclui pendências vencidas e compromissos até o fim do mês, sem descontar faturas futuras. O patrimônio desconta toda a dívida de cartão em aberto. O histórico é reconstruído com os saldos iniciais cadastrados, datas de liquidação, compras e pagamentos; alterações retroativas recalculam a série (não são snapshots contábeis). Contas inativas continuam compondo o patrimônio. Pagamentos de fatura não podem ser editados/excluídos como lançamentos avulsos.
+
+Recorrências atrasadas avançam uma ocorrência por execução; o comando `php artisan fcontrol:materialize-recurrences` permite executar outra rodada. Limites, término, dia-base e idempotência são preservados, inclusive sob execução concorrente.
+
 Backup e restauração no Windows:
 
 ```powershell
@@ -90,6 +93,8 @@ Todos os endpoints financeiros exigem JWT e derivam `user_id` do usuário autent
 Endpoints principais: `auth`, `accounts`, `categories`, `tags`, `transactions`, `transfers`, `cards`, `card-purchases`, `invoices`, `budgets`, `goals`, `recurrences`, `attachments`, `dashboard` e `reports` sob `/api/v1`.
 
 ## Git Flow e CI/CD
+
+A ferramenta local `agents/engineering_loop.py` coordena checks com OpenAI Agents SDK, separada da aplicação e ignorada pelo Git conforme a regra dos artefatos de engenharia. No workspace onde foi preparada: `uv run agents/engineering_loop.py --self-test` valida o contrato sem API; `--offline` executa os checks locais (requer MySQL de testes, dependências de desenvolvimento em `backend/vendor` e imagem `fcontrol-frontend-build:latest` atualizada). Para revisão com modelo, configure `OPENAI_API_KEY` no ambiente e informe `--model`. Somente nomes/status dos checks são enviados; logs ficam locais e tracing está desabilitado. A aprovação depende dos códigos de saída, não da resposta do modelo. A aplicação financeira não usa IA.
 
 O fluxo aceito é `feature/*`, `fix/*` ou `chore/*` para `develop`, e somente `develop` para `main`. O workflow de validação bloqueia combinações diferentes. Push em `develop` abre, sem duplicar, uma PR manual para `main`. O merge nunca é automático.
 

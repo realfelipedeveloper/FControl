@@ -10,6 +10,7 @@ use App\Models\CreditCard;
 use App\Models\Goal;
 use App\Models\Invoice;
 use App\Models\Transaction;
+use App\Services\BalanceHistory;
 use App\Services\Money;
 use Carbon\CarbonImmutable;
 use Illuminate\Http\JsonResponse;
@@ -29,12 +30,17 @@ class DashboardController extends Controller
         $transactionExpense = (string) (clone $base)->where('type', 'expense')->sum('amount');
         $cardExpense = (string) CardInstallment::whereHas('purchase', fn ($query) => $query->where('user_id', $uid))->whereBetween('competence_date', [$start, $end])->sum('amount');
         $expense = $this->add($transactionExpense, $cardExpense);
-        $accounts = Account::where('user_id', $uid)->where('active', true)->get()->each->append('current_balance');
+        $accounts = Account::where('user_id', $uid)->get()->each->append('current_balance');
         $balance = $accounts->reduce(fn (string $total, Account $account) => $this->add($total, $account->current_balance), '0.00');
-        $pendingIncome = (string) (clone $base)->where('type', 'income')->whereIn('status', ['planned', 'pending', 'overdue'])->sum('amount');
-        $pendingExpense = (string) (clone $base)->where('type', 'expense')->whereIn('status', ['planned', 'pending', 'overdue'])->sum('amount');
+        $pending = Transaction::where('user_id', $uid)->where('affects_metrics', true)->whereIn('status', ['planned', 'pending', 'overdue']);
+        $pendingIncome = (string) (clone $pending)->where('type', 'income')->sum('amount');
+        $pendingExpense = (string) (clone $pending)->where('type', 'expense')->sum('amount');
         $openInvoices = (string) Invoice::where('user_id', $uid)->whereIn('status', ['open', 'closed', 'overdue'])->sum('total');
-        $projected = $this->subtract($this->add($balance, $pendingIncome), $this->add($pendingExpense, $openInvoices));
+        $monthPending = (clone $pending)->whereRaw('COALESCE(due_date, transaction_date) <= ?', [$end->toDateString()]);
+        $monthIncome = (string) (clone $monthPending)->where('type', 'income')->sum('amount');
+        $monthExpense = (string) (clone $monthPending)->where('type', 'expense')->sum('amount');
+        $monthInvoices = (string) Invoice::where('user_id', $uid)->whereIn('status', ['open', 'closed', 'overdue'])->whereDate('due_date', '<=', $end)->sum('total');
+        $projected = $this->subtract($this->add($balance, $monthIncome), $this->add($monthExpense, $monthInvoices));
         $monthly = $this->monthlySeries($uid, $start->subMonths(11), $end);
         $categories = $this->categorySeries($uid, $start, $end);
         $accountSpending = $this->accountSpending($uid, $start, $end);
@@ -49,7 +55,7 @@ class DashboardController extends Controller
             return [...$budget->toArray(), 'realized_amount' => $realized, 'remaining_amount' => $remaining, 'percentage' => $percentage, 'indicator' => $percentage > 100 ? 'exceeded' : ($percentage >= 80 ? 'near' : 'normal')];
         });
         $result = $this->subtract($income, $expense);
-        $overdueInvoices = (string) Invoice::where('user_id', $uid)->where('status', 'overdue')->sum('total');
+        $overdueInvoices = (string) Invoice::where('user_id', $uid)->whereIn('status', ['open', 'closed', 'overdue'])->whereDate('due_date', '<', today())->sum('total');
         $netWorth = $this->subtract($balance, $openInvoices);
 
         return response()->json(['data' => [
@@ -66,13 +72,13 @@ class DashboardController extends Controller
                 'average_expense' => $this->average($monthly, 'expense'),
                 'payable' => $this->add($pendingExpense, $openInvoices),
                 'receivable' => $pendingIncome,
-                'overdue' => $this->add((string) (clone $base)->where('status', 'overdue')->sum('amount'), $overdueInvoices),
+                'overdue' => $this->add((string) (clone $pending)->where('type', 'expense')->whereDate('due_date', '<', today())->sum('amount'), $overdueInvoices),
                 'fixed_expenses' => (string) (clone $base)->where('type', 'expense')->where('is_fixed', true)->sum('amount'),
                 'variable_expenses' => $this->add((string) (clone $base)->where('type', 'expense')->where('is_fixed', false)->sum('amount'), $cardExpense),
             ],
             'accounts' => $accounts,
             'monthly' => $monthly,
-            'net_worth_evolution' => $this->netWorthEvolution($monthly, $netWorth),
+            'net_worth_evolution' => app(BalanceHistory::class)->monthly($uid, $start->subMonths(11), $end),
             'categories' => $categories,
             'account_spending' => $accountSpending,
             'card_spending' => $cardSpending,
@@ -141,26 +147,6 @@ class DashboardController extends Controller
         $cards = DB::table('card_installments')->join('card_purchases', 'card_purchases.id', '=', 'card_installments.card_purchase_id')->where('card_purchases.user_id', $uid)->whereBetween('card_installments.competence_date', [$start, $end])->selectRaw("CONCAT('card-', card_installments.id) as row_id, card_purchases.description, card_installments.amount, card_installments.competence_date, 'card' as source");
 
         return DB::query()->fromSub($transactions->unionAll($cards), 'expenses')->orderByDesc('amount')->limit(5)->get();
-    }
-
-    private function netWorthEvolution(Collection $monthly, string $currentNetWorth): Collection
-    {
-        $grouped = $monthly->groupBy('month');
-        $periodResult = $grouped->reduce(function (string $sum, Collection $rows) {
-            $income = (string) ($rows->firstWhere('type', 'income')['total'] ?? '0.00');
-            $expense = (string) ($rows->firstWhere('type', 'expense')['total'] ?? '0.00');
-
-            return $this->add($sum, $this->subtract($income, $expense));
-        }, '0.00');
-        $running = $this->subtract($currentNetWorth, $periodResult);
-
-        return $grouped->map(function (Collection $rows, string $month) use (&$running) {
-            $income = (string) ($rows->firstWhere('type', 'income')['total'] ?? '0.00');
-            $expense = (string) ($rows->firstWhere('type', 'expense')['total'] ?? '0.00');
-            $running = $this->add($running, $this->subtract($income, $expense));
-
-            return ['month' => $month, 'total' => $running];
-        })->values();
     }
 
     private function add(string $left, string $right): string

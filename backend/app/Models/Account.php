@@ -34,10 +34,11 @@ class Account extends Model
     protected function currentBalance(): Attribute
     {
         return Attribute::get(function (): string {
-            $income = $this->transactions()->where('type', 'income')->where('status', 'received')->sum('amount');
-            $expense = $this->transactions()->where('type', 'expense')->where('status', 'paid')->sum('amount');
-            $incoming = Transfer::where('to_account_id', $this->id)->sum('amount');
-            $outgoing = Transfer::where('from_account_id', $this->id)->sum('amount');
+            $settled = $this->transactions()->whereRaw('COALESCE(settled_at, transaction_date) <= ?', [today()->toDateString()]);
+            $income = (clone $settled)->where('type', 'income')->where('status', 'received')->sum('amount');
+            $expense = (clone $settled)->where('type', 'expense')->where('status', 'paid')->sum('amount');
+            $incoming = Transfer::where('to_account_id', $this->id)->whereDate('transferred_at', '<=', today())->sum('amount');
+            $outgoing = Transfer::where('from_account_id', $this->id)->whereDate('transferred_at', '<=', today())->sum('amount');
 
             return bcsub(bcadd((string) $this->initial_balance, bcadd((string) $income, (string) $incoming, 2), 2), bcadd((string) $expense, (string) $outgoing, 2), 2);
         });

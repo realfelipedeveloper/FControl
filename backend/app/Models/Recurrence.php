@@ -7,6 +7,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Carbon;
 
 /** @property Carbon $next_execution_at
+ * @property Carbon $start_date
  * @property Carbon|null $end_date
  * @property array<string, mixed> $template
  */

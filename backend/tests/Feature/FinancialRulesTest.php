@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Models\Account;
 use App\Models\CreditCard;
 use App\Models\Invoice;
+use App\Models\Transaction;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use PHPUnit\Framework\Attributes\Test;
@@ -57,5 +58,27 @@ class FinancialRulesTest extends TestCase
         self::assertSame('400.00', $account->fresh()->current_balance);
         $this->withToken($token)->postJson("/api/v1/invoices/{$invoice->id}/pay")->assertUnprocessable();
         self::assertSame('400.00', $account->fresh()->current_balance);
+        $payment = Transaction::where('user_id', $user->id)->where('affects_metrics', false)->firstOrFail();
+        $this->withToken($token)->patchJson("/api/v1/transactions/{$payment->id}", ['amount' => '1.00'])->assertUnprocessable();
+        $this->withToken($token)->deleteJson("/api/v1/transactions/{$payment->id}")->assertUnprocessable();
+        self::assertSame('400.00', $account->fresh()->current_balance);
+    }
+
+    #[Test]
+    public function compra_nao_altera_fatura_paga_e_vencimento_respeita_fechamento(): void
+    {
+        $user = User::factory()->create();
+        $account = Account::create(['user_id' => $user->id, 'name' => 'Conta', 'type' => 'checking', 'initial_balance' => '500.00']);
+        $card = CreditCard::create(['user_id' => $user->id, 'payment_account_id' => $account->id, 'name' => 'Cartão', 'credit_limit' => '1000.00', 'closing_day' => 25, 'due_day' => 5]);
+        $token = auth('api')->login($user);
+        $purchase = ['credit_card_id' => $card->id, 'description' => 'Compra', 'total_amount' => '100.00', 'installment_count' => 1, 'purchased_at' => '2026-09-01'];
+        $this->withToken($token)->postJson('/api/v1/card-purchases', $purchase)->assertCreated();
+        $invoice = Invoice::where('user_id', $user->id)->firstOrFail();
+        self::assertSame('2026-09-25', $invoice->period_end->toDateString());
+        self::assertSame('2026-10-05', $invoice->due_date->toDateString());
+        $this->withToken($token)->postJson("/api/v1/invoices/{$invoice->id}/pay")->assertOk();
+        $this->withToken($token)->postJson('/api/v1/card-purchases', $purchase)->assertUnprocessable();
+        self::assertSame('100.00', $invoice->fresh()->total);
+        $this->assertDatabaseCount('card_purchases', 1);
     }
 }

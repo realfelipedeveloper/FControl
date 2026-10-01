@@ -18,10 +18,12 @@ use App\Models\Transaction;
 use App\Services\AuditService;
 use App\Services\Money;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
@@ -45,9 +47,11 @@ class ResourceController extends Controller
         Gate::authorize('viewAny', $model);
         $query = $model::query()->where('user_id', $request->user()->id)->with($with);
         $this->filters($query, $request);
-        $sort = in_array($request->string('sort')->toString(), ['name', 'description', 'created_at', 'transaction_date', 'due_date', 'month', 'target_date'], true) ? $request->string('sort')->toString() : 'created_at';
+        [, $rules] = $this->config($request);
+        $sort = $request->string('sort', 'created_at')->toString();
+        $sort = $sort === 'created_at' || (isset($rules[$sort]) && ! str_contains($sort, '.') && ! in_array($sort, ['template', 'tag_ids'], true)) ? $sort : 'created_at';
         $direction = $request->string('direction')->toString() === 'asc' ? 'asc' : 'desc';
-        $result = $query->orderBy($sort, $direction)->paginate(min($request->integer('per_page', 15), 100));
+        $result = $query->orderBy($sort, $direction)->orderBy('id', $direction)->paginate(max(1, min($request->integer('per_page', 15), 100)));
         if ($request->route('resource') === 'accounts') {
             $result->getCollection()->each->append('current_balance');
         }
@@ -77,6 +81,7 @@ class ResourceController extends Controller
         [$model, $rules, $with] = $this->config($request);
         Gate::authorize('create', $model);
         $data = $request->validate($this->secureRules($rules, $request));
+        $data = $this->validateFinancialData($data, $request);
         if ($model === Category::class) {
             $this->validateCategoryHierarchy($request, $data);
         }
@@ -108,23 +113,34 @@ class ResourceController extends Controller
 
     public function update(Request $request, int $id): JsonResponse
     {
-        [$model, $rules, $with] = $this->config($request);
-        $item = $model::where('user_id', $request->user()->id)->findOrFail($id);
-        Gate::authorize('update', $item);
-        $partial = collect($this->secureRules($rules, $request))->map(fn ($rule) => is_array($rule) ? array_merge(['sometimes'], $rule) : 'sometimes|'.$rule)->all();
-        $data = $request->validate($partial);
-        if ($item instanceof Category) {
-            $this->validateCategoryHierarchy($request, $data, $item);
-        }
-        $tagIds = $data['tag_ids'] ?? null;
-        unset($data['tag_ids']);
-        $item->update($data);
-        if ($item instanceof Transaction && is_array($tagIds)) {
-            $item->tags()->sync($tagIds);
-        }
-        AuditService::record($request, $request->route('resource').'.updated', $item);
+        return DB::transaction(function () use ($request, $id) {
+            [$model, $rules, $with] = $this->config($request);
+            $item = $model::where('user_id', $request->user()->id)->lockForUpdate()->findOrFail($id);
+            Gate::authorize('update', $item);
+            abort_if($item instanceof Transaction && ! $item->affects_metrics, 422, 'Pagamentos de fatura não podem ser alterados como lançamentos avulsos.');
+            $partial = collect($this->secureRules($rules, $request))->map(fn ($rule) => is_array($rule) ? array_merge(['sometimes'], $rule) : 'sometimes|'.$rule)->all();
+            if ($item instanceof Recurrence && $request->has('template')) {
+                foreach ($this->secureRules($rules, $request) as $field => $rule) {
+                    if (str_starts_with($field, 'template.')) {
+                        $partial[$field] = $rule;
+                    }
+                }
+            }
+            $data = $request->validate($partial);
+            $data = $this->validateFinancialData($data, $request, $item);
+            if ($item instanceof Category) {
+                $this->validateCategoryHierarchy($request, $data, $item);
+            }
+            $tagIds = $data['tag_ids'] ?? null;
+            unset($data['tag_ids']);
+            $item->update($data);
+            if ($item instanceof Transaction && is_array($tagIds)) {
+                $item->tags()->sync($tagIds);
+            }
+            AuditService::record($request, $request->route('resource').'.updated', $item);
 
-        return (new FinancialResource($item->fresh()->load($with)))->additional(['message' => 'Registro atualizado.'])->response();
+            return (new FinancialResource($item->fresh()->load($with)))->additional(['message' => 'Registro atualizado.'])->response();
+        });
     }
 
     public function destroy(Request $request, int $id): JsonResponse
@@ -132,6 +148,7 @@ class ResourceController extends Controller
         [$model] = $this->config($request);
         $item = $model::where('user_id', $request->user()->id)->findOrFail($id);
         Gate::authorize('delete', $item);
+        abort_if($item instanceof Transaction && ! $item->affects_metrics, 422, 'Pagamentos de fatura não podem ser excluídos como lançamentos avulsos.');
         $item->delete();
         AuditService::record($request, $request->route('resource').'.deleted', $item);
 
@@ -164,6 +181,7 @@ class ResourceController extends Controller
             $rules['status'] = ['required', Rule::enum(TransactionStatus::class)];
         }
         if ($request->route('resource') === 'recurrences') {
+            $rules['template'] = 'required|array:account_id,category_id,type,description,amount,status,due_date,settled_at,is_fixed,notes';
             $rules['template.type'] = ['required', Rule::enum(FinancialType::class)];
         }
 
@@ -173,7 +191,7 @@ class ResourceController extends Controller
             }
         }
         if (isset($rules['category_id'])) {
-            $rules['category_id'] = ['nullable', Rule::exists('categories', 'id')->where('user_id', $request->user()->id)->whereNull('deleted_at')];
+            $rules['category_id'] = [$request->route('resource') === 'budgets' ? 'required' : 'nullable', Rule::exists('categories', 'id')->where('user_id', $request->user()->id)->whereNull('deleted_at')];
         }
         if (isset($rules['parent_id'])) {
             $rules['parent_id'] = ['nullable', Rule::exists('categories', 'id')->where('user_id', $request->user()->id)->whereNull('deleted_at')];
@@ -197,15 +215,21 @@ class ResourceController extends Controller
                 'goals' => ['name', 'description'],
                 'accounts' => ['name', 'institution'],
                 'cards' => ['name', 'institution'],
+                'recurrences' => ['template->description'],
+                'budgets' => [],
                 default => ['name'],
             };
+            if ($request->route('resource') === 'budgets') {
+                $query->whereHas('category', fn ($category) => $category->where('name', 'like', "%$search%"));
+            }
             $query->where(function ($q) use ($fields, $search) {
                 foreach ($fields as $index => $field) {
                     $index === 0 ? $q->where($field, 'like', "%$search%") : $q->orWhere($field, 'like', "%$search%");
                 }
             });
         }
-        foreach (['type', 'status', 'account_id', 'category_id', 'credit_card_id', 'active'] as $field) {
+        [, $rules] = $this->config($request);
+        foreach (array_intersect(['type', 'status', 'account_id', 'category_id', 'credit_card_id', 'active'], array_keys($rules)) as $field) {
             if ($request->filled($field)) {
                 $query->where($field, $request->input($field));
             }
@@ -218,6 +242,33 @@ class ResourceController extends Controller
         }
     }
 
+    private function validateFinancialData(array $data, Request $request, ?Model $item = null): array
+    {
+        $resource = $request->route('resource');
+        if ($resource === 'budgets' && isset($data['month'])) {
+            $data['month'] = Carbon::parse($data['month'])->startOfMonth()->toDateString();
+        }
+        if ($resource === 'goals' && $item instanceof Goal && array_key_exists('current_amount', $data) && $item->contributions()->exists() && Money::toCents((string) ($data['current_amount'] ?? '0.00')) !== Money::toCents((string) $item->current_amount)) {
+            throw ValidationException::withMessages(['current_amount' => 'Registre uma contribuição para alterar uma meta com histórico.']);
+        }
+        if ($resource === 'goals' && array_key_exists('current_amount', $data) && $data['current_amount'] === null) {
+            $data['current_amount'] = '0.00';
+        }
+        if (in_array($resource, ['transactions', 'recurrences'], true)) {
+            $values = $resource === 'recurrences' ? ($data['template'] ?? $item?->getAttribute('template') ?? []) : [...($item?->getAttributes() ?? []), ...$data];
+            $prefix = $resource === 'recurrences' ? 'template.' : '';
+            $type = $values['type'] ?? null;
+            if (($type === 'income' && ($values['status'] ?? null) === 'paid') || ($type === 'expense' && ($values['status'] ?? null) === 'received')) {
+                throw ValidationException::withMessages([$prefix.'status' => 'Receitas são recebidas; despesas são pagas. Revise o status.']);
+            }
+            if (! empty($values['category_id']) && Category::whereKey($values['category_id'])->where('type', '!=', $type)->exists()) {
+                throw ValidationException::withMessages([$prefix.'category_id' => 'A categoria deve possuir o mesmo tipo do lançamento.']);
+            }
+        }
+
+        return $data;
+    }
+
     private function appendCardLimits(CreditCard $card): void
     {
         $used = (string) $card->invoices()->whereIn('status', ['open', 'closed', 'overdue'])->sum('total');
@@ -228,6 +279,9 @@ class ResourceController extends Controller
     /** @param array<string, mixed> $data */
     private function validateCategoryHierarchy(Request $request, array $data, ?Category $item = null): void
     {
+        if ($item && isset($data['type']) && $data['type'] !== $item->type && Category::where('parent_id', $item->id)->exists()) {
+            throw ValidationException::withMessages(['type' => 'Altere ou remova as subcategorias antes de mudar o tipo.']);
+        }
         $parentId = array_key_exists('parent_id', $data) ? $data['parent_id'] : $item?->parent_id;
         if (! $parentId) {
             return;

@@ -18,6 +18,7 @@ class AuthTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
+        $this->freezeTime();
         config(['jwt.secret' => str_repeat('a', 64)]);
     }
 

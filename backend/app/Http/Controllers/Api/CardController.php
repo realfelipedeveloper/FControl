@@ -51,7 +51,11 @@ class CardController extends Controller
                 $start = $competence->startOfMonth();
                 $end = $competence->endOfMonth();
                 $due = $competence->day(min($card->due_day, $competence->daysInMonth));
-                $invoice = Invoice::firstOrCreate(['credit_card_id' => $card->id, 'period_start' => $start->toDateString()], ['user_id' => $request->user()->id, 'period_end' => $end->toDateString(), 'due_date' => $due->toDateString(), 'status' => 'open', 'total' => '0.00']);
+                if ($card->due_day <= $card->closing_day) {
+                    $due = $due->addMonthNoOverflow();
+                }
+                $invoice = Invoice::firstOrCreate(['credit_card_id' => $card->id, 'period_start' => $start->toDateString()], ['user_id' => $request->user()->id, 'period_end' => $start->day($card->closing_day)->toDateString(), 'due_date' => $due->toDateString(), 'status' => 'open', 'total' => '0.00']);
+                abort_if($invoice->status === 'paid', 422, 'A compra pertence a uma fatura já paga. Revise a data da compra.');
                 $purchase->installments()->create(['invoice_id' => $invoice->id, 'number' => $i + 1, 'amount' => Money::fromCents($parts[$i]), 'competence_date' => $competence->toDateString()]);
                 $invoice->update(['total' => Money::fromCents(Money::toCents((string) $invoice->total) + $parts[$i])]);
             }
@@ -80,9 +84,13 @@ class CardController extends Controller
     public function pay(Request $request, int $id): JsonResponse
     {
         $invoice = Invoice::where('user_id', $request->user()->id)->with('creditCard')->findOrFail($id);
-        abort_if($invoice->status === 'paid', 422, 'Fatura já paga.');
         DB::transaction(function () use ($invoice, $request) {
-            $invoice->lockForUpdate();
+            // Purchases and payments acquire locks in the same order.
+            $card = CreditCard::withTrashed()->whereKey($invoice->credit_card_id)->lockForUpdate()->firstOrFail();
+            $invoice = Invoice::whereKey($invoice->id)->lockForUpdate()->firstOrFail();
+            $invoice->setRelation('creditCard', $card);
+            abort_if($invoice->status === 'paid', 422, 'Fatura já paga.');
+            abort_unless($card->paymentAccount()->exists(), 422, 'Selecione uma conta de pagamento disponível para o cartão.');
             Transaction::create(['user_id' => $request->user()->id, 'account_id' => $invoice->creditCard->payment_account_id, 'type' => 'expense', 'description' => 'Pagamento de fatura '.$invoice->creditCard->name, 'amount' => $invoice->total, 'transaction_date' => now()->toDateString(), 'competence_date' => $invoice->period_start, 'settled_at' => now()->toDateString(), 'status' => 'paid', 'affects_metrics' => false, 'notes' => 'Pagamento financeiro da fatura; excluído das métricas de competência.']);
             $invoice->update(['status' => 'paid', 'paid_at' => now()]);
         });

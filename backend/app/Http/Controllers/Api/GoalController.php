@@ -17,7 +17,7 @@ class GoalController extends Controller
         $data = $request->validate(['amount' => 'required|decimal:0,2|gt:0', 'contributed_at' => 'required|date', 'notes' => 'nullable|string|max:1000']);
         $goal = Goal::where('user_id', $request->user()->id)->findOrFail($id);
         DB::transaction(function () use ($goal, $data) {
-            $goal->lockForUpdate();
+            $goal = Goal::whereKey($goal->id)->lockForUpdate()->firstOrFail();
             $goal->contributions()->create($data);
             $new = Money::toCents((string) $goal->current_amount) + Money::toCents((string) $data['amount']);
             $goal->update(['current_amount' => Money::fromCents($new), 'status' => $new >= Money::toCents((string) $goal->target_amount) ? 'completed' : $goal->status]);

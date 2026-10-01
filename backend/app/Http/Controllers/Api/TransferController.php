@@ -15,7 +15,14 @@ class TransferController extends Controller
 {
     public function index(Request $request): JsonResponse
     {
-        return response()->json(Transfer::where('user_id', $request->user()->id)->with(['fromAccount', 'toAccount'])->latest('transferred_at')->paginate(min($request->integer('per_page', 15), 100)));
+        $query = Transfer::where('user_id', $request->user()->id)->with(['fromAccount', 'toAccount']);
+        if ($search = $request->string('search')->toString()) {
+            $query->where('description', 'like', "%$search%");
+        }
+        $sort = in_array($request->input('sort'), ['created_at', 'description', 'transferred_at'], true) ? $request->input('sort') : 'transferred_at';
+        $direction = $request->input('direction') === 'asc' ? 'asc' : 'desc';
+
+        return response()->json($query->orderBy($sort, $direction)->orderBy('id', $direction)->paginate(max(1, min($request->integer('per_page', 15), 100))));
     }
 
     public function store(Request $request): JsonResponse
