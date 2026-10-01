@@ -85,6 +85,7 @@ Backup e restauração no Windows:
 ```
 
 Os dumps permanecem em `backups/`, ignorado pelo Git.
+O backup só recebe extensão `.sql` após sucesso. A restauração exige confirmação, admite `-WhatIf` para simulação e gera um backup preventivo antes de substituir dados.
 
 ## API e segurança
 
