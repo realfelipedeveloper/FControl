@@ -43,6 +43,7 @@ services:
     depends_on:
       mysql:
         condition: service_healthy
+    restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "php-fpm -t"]
       interval: 15s
@@ -56,10 +57,8 @@ services:
       dockerfile: docker/backend/Dockerfile
     command: php artisan schedule:work
     environment: *backend-env
-    volumes:
-      - backend_storage:/var/www/html/storage
     depends_on:
-      mysql:
+      backend:
         condition: service_healthy
     restart: unless-stopped
     networks: [fcontrol]
